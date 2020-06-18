@@ -9,6 +9,7 @@ import java.nio.file.Paths
 
 
 data class DocumentAttributes(val slug: String,
+                              val id: Long?,
                               val title: String,
                               val tags: Set<String>,
                               val categories: Set<String>,
@@ -60,6 +61,7 @@ class DocumentAttributesReader(val logger: Logger) {
 
   internal fun fromMap(attributes: Map<*, *>, content: String, yamlFileAbsolutePath: String, fileName: String): DocumentAttributes? {
     logger.debug("Document attributes in the YAML file: $attributes")
+    val id = getId(attributes)
     val slug = getSlug(attributes, yamlFileAbsolutePath, fileName)
     val title = getTitle(attributes, yamlFileAbsolutePath, fileName)
     return if (slug != null && title != null) {
@@ -85,7 +87,7 @@ class DocumentAttributesReader(val logger: Logger) {
       val author = getAuthor(attributes)
       val excerpt = getExcerpt(attributes)
       val featuredMedia = getFeaturedMedia(attributes)
-      DocumentAttributes(slug, title, uniqueTags, uniqueCategories, uniqueTaxonomies, excerpt, featuredMedia, author, content, parentPath)
+      DocumentAttributes(slug, id, title, uniqueTags, uniqueCategories, uniqueTaxonomies, excerpt, featuredMedia, author, content, parentPath)
     } else {
       null
     }
@@ -182,6 +184,14 @@ class DocumentAttributesReader(val logger: Logger) {
 
   private fun getSlug(attributes: Map<*, *>, yamlFilePath: String, fileName: String): String? {
     return getMandatoryString(attributes, "slug", yamlFilePath, fileName)
+  }
+
+  private fun getId(attributes: Map<*, *>): Long? {
+    val value = attributes["wordpress_id"]
+    if (value is Number) {
+      return value.toLong()
+    }
+    return null
   }
 
   private val spaceRegex = Regex("\\s")

@@ -156,7 +156,7 @@ data class WordPressDocumentType(val name: String) {
   }
 }
 
-data class WordPressDocument(val id: Int,
+data class WordPressDocument(val id: Long,
                              val slug: String,
                              val type: WordPressDocumentType)
 
@@ -183,7 +183,9 @@ internal class WordPressUpload(val documentType: WordPressDocumentType,
       return false
     }
     val slugs = documentsWithAttributes.map { it.slug }
-    val  wordPressDocumentsBySlug = getWordPressDocumentsBySlug(slugs) ?: return false
+    val ids = documentsWithAttributes.mapNotNull { it.id }
+    val wordPressDocumentsBySlug = getWordPressDocumentsBySlug(slugs) ?: return false
+    val wordPressDocumentsById = getWordPressDocumentsById(ids) ?: return false
     val parentIdsByPath = mutableMapOf<String, WordPressDocument?>()
     val taxonomyReferencesBySlug = if (documentType.name !== "page") {
       val taxonomySlugs = documentsWithAttributes.flatMap {
@@ -307,10 +309,14 @@ internal class WordPressUpload(val documentType: WordPressDocumentType,
           data["featured_media"] = wordPressMedia.id
         }
       }
-      val wordPressDocument = wordPressDocumentsBySlug[documentAttributes.slug]
-      if (wordPressDocument != null) {
+      val existingWordPressDocument = if (documentAttributes.id != null) {
+        wordPressDocumentsById[documentAttributes.id]
+      } else {
+        wordPressDocumentsBySlug[documentAttributes.slug]
+      }
+      if (existingWordPressDocument != null) {
         // document already exists on WordPress, updating...
-        updateDocument(data, wordPressDocument)
+        updateDocument(data, existingWordPressDocument)
       } else {
         // document does not exist on WordPress, creating...
         createDocument(data)
@@ -329,6 +335,43 @@ internal class WordPressUpload(val documentType: WordPressDocumentType,
     return agg
   }
 
+  private fun getWordPressDocumentsById(ids: List<Long>): Map<Long, WordPressDocument>? {
+    val idsChunks = ids.chunked(100)
+    val agg = mutableMapOf<Long, WordPressDocument>()
+    for (idsChunk in idsChunks) {
+      val result = getWordPressDocumentsByIdChunk(idsChunk) ?: return null
+      agg.putAll(result)
+    }
+    return agg
+  }
+
+  private fun getWordPressDocumentsByIdChunk(ids: List<Long>): Map<Long, WordPressDocument>? {
+    val searchUrl = httpClient.baseUrlBuilder()
+      .addPathSegment(documentType.urlPath)
+      .addQueryParameter("per_page", ids.size.toString())
+      .addQueryParameter("include", ids.joinToString(","))
+      .addQueryParameter("status", "publish,future,draft,pending,private")
+      .build()
+    val searchRequest = httpClient.buildGetRequest(searchUrl)
+    return httpClient.executeRequest(searchRequest) { responseBody ->
+      try {
+        val jsonArray = klaxon.parseJsonArray(responseBody.charStream())
+        jsonArray.value.mapNotNull { item ->
+          if (item is JsonObject) {
+            val id = item.long("id")!!
+            val slug = item.string("slug")!!
+            id to WordPressDocument(id, slug, documentType)
+          } else {
+            null
+          }
+        }.toMap()
+      } catch (e: KlaxonException) {
+        logger.error("Unable to parse the response", e)
+        null
+      }
+    }
+  }
+
   private fun getWordPressDocumentsBySlugChunk(slugs: List<String>): Map<String, WordPressDocument>? {
     val searchUrl = httpClient.baseUrlBuilder()
       .addPathSegment(documentType.urlPath)
@@ -343,7 +386,7 @@ internal class WordPressUpload(val documentType: WordPressDocumentType,
         jsonArray.value.mapNotNull { item ->
           if (item is JsonObject) {
             val slug = item.string("slug")!!
-            slug to WordPressDocument(item.int("id")!!, slug, documentType)
+            slug to WordPressDocument(item.long("id")!!, slug, documentType)
           } else {
             null
           }
@@ -383,7 +426,7 @@ internal class WordPressUpload(val documentType: WordPressDocumentType,
             val parentLinkPath = parentPath.removeSuffix("/")
             if (linkPath == parentLinkPath) {
               val slug = item.string("slug")!!
-              WordPressDocument(item.int("id")!!, slug, documentType)
+              WordPressDocument(item.long("id")!!, slug, documentType)
             } else {
               null
             }
